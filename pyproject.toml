@@ -1,0 +1,17 @@
+[project]
+name = "hs-hackathon-drone-control"
+version = "0.0.0"
+requires-python = ">=3.10,<3.12"
+dependencies = [
+    "protobuf>=4.25.0",
+    "grpcio>=1.59.2",
+    "grpcio-tools>=1.59.2",
+    "python-dotenv>=1.0.0",
+]
+
+[tool.uv]
+index-strategy = "unsafe-first-match"
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
