@@ -4,6 +4,8 @@ from enum import Enum
 import generated.drone_pb2 as pb2
 import generated.drone_pb2_grpc as pb2_gprc
 import grpc
+import time
+
 
 
 class SimulationState(Enum):
@@ -25,6 +27,11 @@ class DroneClient:
         # Bind send queue to sending service
         metadata = [("authorization", f"Bearer {token}")]
         self.event_stream = self.stub.DroneConnection(iter(self.send_queue.get, None), metadata=metadata)
+
+        self.time_in_good_zone = 0.0
+        self.last_update_time = None
+        self.sim_start_time = None
+
 
     def start(self):
         # Start the control loop etc
@@ -109,6 +116,7 @@ class DroneClient:
                     print("Goal region: ", self.goal_region)
                     self.position = result.start.drone_location
                     self.simulation_state = SimulationState.STARTED
+                    self.sim_start_time = time.time() 
                     continue
                 else:
                     raise ValueError("Did not receive Simulation Start message as first message")
@@ -116,22 +124,41 @@ class DroneClient:
             # If we receive SimOver ("ended") - end
             if result.WhichOneof("data") == "ended":
                 self.simulation_state = SimulationState.ENDED
+                total_time = time.time() - self.sim_start_time
                 print("Simulation ended. Success: ", result.ended.success, " (", result.ended.details, ")")
+                print(f"------ Total time in good zone: {self.time_in_good_zone:.2f}s / {total_time:.2f}s ------")
                 return
+
 
             # Update - pass into PID loop
             if result.WhichOneof("data") == "update":
                 self.position = result.update.drone_location
-                print(f"Position: ", self.position.x, self.position.y, self.position.z)
-                # Run PID loop
+
+                # time tracking
+                now = time.time()
+                if self.last_update_time is None:
+                    self.last_update_time = now
+                dt = now - self.last_update_time
+                self.last_update_time = now
+
+                # check if inside good zone
+                if (self.goal_region.minimal_point.x <= self.position.x <= self.goal_region.maximal_point.x and
+                    self.goal_region.minimal_point.y <= self.position.y <= self.goal_region.maximal_point.y and
+                    self.goal_region.minimal_point.z <= self.position.z <= self.goal_region.maximal_point.z):
+                    self.time_in_good_zone += dt
+
+                print(f"Drone has spent {self.time_in_good_zone:.2f} seconds in the good zone")
+
+                # Run control
                 self.control_drone()
+
 
 
 if __name__ == "__main__":
     host = "172.104.137.51"
     port = 10301
     # TODO: add your token here
-    token = "my_token"
+    token = "b794ce6c-8b8c-4330-9c4c-85089892940c"
     if token is None:
         raise ValueError("No token provided!")
     dc = DroneClient(host, port, token)
