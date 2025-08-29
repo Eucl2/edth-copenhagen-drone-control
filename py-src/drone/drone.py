@@ -43,9 +43,45 @@ class DroneClient:
         print(f"Target minimal position: ", min_target_pos.x, min_target_pos.y, min_target_pos.z)
 
         # TODO: Implement your control process here!
+
+        #bigger square, to slow down
+        big_min_target_pos = pb2.DroneClientMsg(
+            throttle=0, pitch=0, roll=0
+        )  # placeholder, we only need coordinates
+
+        big_min_target_pos_x = min_target_pos.x * 2
+        big_min_target_pos_y = min_target_pos.y * 2
+        big_max_target_pos_x = max_target_pos.x * 2
+        big_max_target_pos_y = max_target_pos.y * 2
+
         throttle = 75
         pitch = 0
         roll = 0
+
+        #find center of target region
+        x_best = (min_target_pos.x + max_target_pos.x) / 2
+        y_best = (min_target_pos.y + max_target_pos.y) / 2
+        z_best = (min_target_pos.z + max_target_pos.z) / 2
+
+        # adjust speed based on distance to center
+        dx = x_best - self.position.x
+        dy = y_best - self.position.y
+
+        # slow down if inside big square
+        if big_min_target_pos_x <= self.position.x <= big_max_target_pos_x and \
+        big_min_target_pos_y <= self.position.y <= big_max_target_pos_y:
+            pitch = max(-2, min(2, dx))
+            roll = max(-2, min(2, dy))
+        else:
+            pitch = dx
+            roll = dy
+
+        # altitude
+        if self.position.z >= z_best:
+            throttle = 0
+        else:
+            throttle = 71
+
 
         print("Requesting control input of:")
         print(f"{throttle=}")
@@ -53,9 +89,9 @@ class DroneClient:
         print(f"{roll=}")
         # Send control
         control = pb2.DroneClientMsg(
-            throttle=throttle,
-            pitch=pitch,
-            roll=roll,
+            throttle=int(throttle),
+            pitch=int(pitch),
+            roll=int(roll),
         )
         self.send_queue.put(control)
 
