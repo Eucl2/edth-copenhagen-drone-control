@@ -32,6 +32,8 @@ class DroneClient:
         self.last_update_time = None
         self.sim_start_time = None
 
+        self.has_taken_off = False
+
 
     def start(self):
         # Start the control loop etc
@@ -134,6 +136,10 @@ class DroneClient:
             if result.WhichOneof("data") == "update":
                 self.position = result.update.drone_location
 
+                if not self.has_taken_off and self.position.z > 0.02:  # 2 cm threshold
+                    self.has_taken_off = True
+                    
+
                 # time tracking
                 now = time.time()
                 if self.last_update_time is None:
@@ -148,6 +154,14 @@ class DroneClient:
                     self.time_in_good_zone += dt
 
                 print(f"Drone has spent {self.time_in_good_zone:.2f} seconds in the good zone")
+
+                # check for crash (drone hits ground)
+                if self.has_taken_off and self.position.z <= 0.01:
+                    self.simulation_state = SimulationState.ENDED
+                    total_time = time.time() - self.sim_start_time
+                    print("Simulation ended: Drone hit the ground")
+                    print(f"\n------ Total time in good zone: {self.time_in_good_zone:.2f}s / {total_time:.2f}s ------\n")
+                    return
 
                 # Run control
                 self.control_drone()
