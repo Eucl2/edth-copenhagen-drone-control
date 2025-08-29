@@ -160,7 +160,9 @@ class DroneClient:
                     self.simulation_state = SimulationState.ENDED
                     total_time = time.time() - self.sim_start_time
                     print("Simulation ended: Drone hit the ground")
-                    print(f"\n------ Total time in good zone: {self.time_in_good_zone:.2f}s / {total_time:.2f}s ------\n")
+                    percentage = (self.time_in_good_zone / total_time) * 100 if total_time > 0 else 0
+                    print(f"\n------ Total time in good zone: {self.time_in_good_zone:.2f}s / {total_time:.2f}s ({percentage:.1f}%) ------\n")
+
                     return
 
                 # Run control
