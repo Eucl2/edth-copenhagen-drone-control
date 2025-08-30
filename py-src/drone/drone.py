@@ -6,6 +6,17 @@ import generated.drone_pb2_grpc as pb2_gprc
 import grpc
 import time
 import os
+import math
+
+def estimate_wind_vector_from_tilt(pitch_deg, roll_deg):
+	pitch_rad = math.radians(pitch_deg)
+	roll_rad = math.radians(roll_deg)
+	
+	#Invert for tilting into the wind
+	wind_x = -math.sin(pitch_rad)
+	wind_y = -math.sin(roll_rad)
+	
+	return wind_x, wind_y
 
 def PIDCalculation(min_val, max_val, error, orient, i_z=0.0, prev_e_z=0.0, prev_t = None, extraThrottle=0):
     if (orient == 'throttle'):
@@ -69,6 +80,9 @@ class DroneClient:
         # Bind send queue to sending service
         metadata = [("authorization", f"Bearer {token}")]
         self.event_stream = self.stub.DroneConnection(iter(self.send_queue.get, None), metadata=metadata)
+        self.last_pitch = 0
+        self.last_roll = 0
+
 
         self.time_in_good_zone = 0.0
         self.last_update_time = None
@@ -129,10 +143,17 @@ class DroneClient:
         error_pos_x = x_best - self.position.x
         error_pos_y = y_best - self.position.y
         print(f"Error position: ", error_pos_x, error_pos_y, error_pos_z)
-
+        
         # find the error to the laterals
         if (error_pos_x > self.phase_tolerance or error_pos_x < -self.phase_tolerance) and (error_pos_y > self.phase_tolerance or error_pos_y < -self.phase_tolerance):
             # Takeoff Phase
+            
+            #Estimate wind resistance
+            wind_x, wind_y = estimate_wind_vector_from_tilt(self.last_pitch, self.last_roll)
+            wind_comp_factor = 1  # Tune as needed
+            error_pos_x -= wind_x * wind_comp_factor
+            error_pos_y -= wind_y * wind_comp_factor
+            
             self.min_roll = -30
             self.max_roll = 30
             rollObject = PIDCalculation(self.min_roll, self.max_roll, error_pos_y, 'roll', self.i_y, self.prev_e_y,
@@ -167,6 +188,7 @@ class DroneClient:
             print(f"{throttle=}")
             print(f"{pitch=}")
             print(f"{roll=}")
+            
             # Send control
             control = pb2.DroneClientMsg(
                 throttle=int(throttle),
@@ -174,9 +196,17 @@ class DroneClient:
                 roll=int(roll),
             )
             self.send_queue.put(control)
+            self.last_pitch = pitch
+            self.last_roll = roll
 
         elif (error_pos_x < self.phase_tolerance or error_pos_x > -self.phase_tolerance) and (error_pos_y < self.phase_tolerance or error_pos_y > -self.phase_tolerance) :
             # Stable Phase - with anti-oscillation improvements
+            
+            #Estimate wind resistance
+            wind_x, wind_y = estimate_wind_vector_from_tilt(self.last_pitch, self.last_roll)
+            wind_comp_factor = 0.5 # Tune as needed
+            error_pos_x -= wind_x * wind_comp_factor
+            error_pos_y -= wind_y * wind_comp_factor
             
             # Check if we're very close to center for fine control
             is_very_close = (abs(error_pos_x) < self.fine_control_tolerance and 
@@ -227,6 +257,7 @@ class DroneClient:
             print(f"{throttle=}")
             print(f"{pitch=}")
             print(f"{roll=}")
+            
             # Send control
             control = pb2.DroneClientMsg(
                 throttle=int(throttle),
@@ -234,6 +265,7 @@ class DroneClient:
                 roll=int(roll),
             )
             self.send_queue.put(control)
+            
 
     def receive(self):
         return next(self.event_stream)
