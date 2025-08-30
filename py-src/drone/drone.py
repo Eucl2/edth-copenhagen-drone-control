@@ -17,8 +17,8 @@ def PIDCalculation(min_val, max_val, error, orient, i_z=0.0, prev_e_z=0.0, prev_
         hover = ((min_val + max_val) / 2)
         Kp_z = 1.2
         Ki_z = 0.06
-        Kd_z = 0.2
-
+        Kd_z = 0.4
+        
     i_z_limit = 10.0
 
     now = time.monotonic()
@@ -89,6 +89,7 @@ class DroneClient:
         self.prev_tx = None
 
         self.phase_tolerance = 4
+        self.fine_control_tolerance = 2  # Very close to center - use gentler control
 
     def start(self):
         # Start the control loop etc
@@ -175,10 +176,27 @@ class DroneClient:
             self.send_queue.put(control)
 
         elif (error_pos_x < self.phase_tolerance or error_pos_x > -self.phase_tolerance) and (error_pos_y < self.phase_tolerance or error_pos_y > -self.phase_tolerance) :
-            # Stable Phase
-            # Apply PID control
-            self.min_roll = -8
-            self.max_roll = 8
+            # Stable Phase - with anti-oscillation improvements
+            
+            # Check if we're very close to center for fine control
+            is_very_close = (abs(error_pos_x) < self.fine_control_tolerance and 
+                           abs(error_pos_y) < self.fine_control_tolerance)
+            
+            if is_very_close:
+                # Fine control - very gentle movements to prevent oscillation
+                self.min_roll = -3
+                self.max_roll = 3
+                self.min_pitch = -3
+                self.max_pitch = 3
+                print("FINE CONTROL MODE - Very close to target")
+            else:
+                # Normal stable control
+                self.min_roll = -8
+                self.max_roll = 8
+                self.min_pitch = -8
+                self.max_pitch = 8
+                print("NORMAL STABLE MODE")
+                
             rollObject = PIDCalculation(self.min_roll, self.max_roll, error_pos_y, 'roll', self.i_y, self.prev_e_y,
                                         self.prev_ty)
             roll = rollObject["pidValue"]
@@ -187,8 +205,6 @@ class DroneClient:
             self.prev_ty = rollObject["prev_t"]
             print(f"Roll history: ", self.i_y, self.prev_e_y, self.prev_ty)
 
-            self.min_pitch = -8
-            self.max_pitch = 8
             pitchObject = PIDCalculation(self.min_pitch, self.max_pitch, error_pos_x, 'pitch', self.i_x, self.prev_e_x,
                                          self.prev_tx)
             pitch = pitchObject["pidValue"]
@@ -246,7 +262,8 @@ class DroneClient:
                 self.simulation_state = SimulationState.ENDED
                 total_time = time.time() - self.sim_start_time
                 print("Simulation ended. Success: ", result.ended.success, " (", result.ended.details, ")")
-                print(f"------ Total time in good zone: {self.time_in_good_zone:.2f}s / {total_time:.2f}s ------")
+                percentage = (self.time_in_good_zone / total_time) * 100 if total_time > 0 else 0
+                print(f"\n------ Total time in good zone: {self.time_in_good_zone:.2f}s / {total_time:.2f}s ({percentage:.1f}%) ------\n")
                 return
 
 
