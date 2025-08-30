@@ -5,23 +5,24 @@ import generated.drone_pb2 as pb2
 import generated.drone_pb2_grpc as pb2_gprc
 import grpc
 import time
+import os
 
 def PIDCalculation(min_val, max_val, error, orient, i_z=0.0, prev_e_z=0.0, prev_t = None, extraThrottle=0):
     if (orient == 'throttle'):
         hover = ((min_val + max_val) / 2 + 5)
         Kp_z = 10.0
-        Ki_z = 0.0
-        Kd_z = 0.0
+        Ki_z = 1#0.5
+        Kd_z = 0.1
     else:
         hover = ((min_val + max_val) / 2)
         Kp_z = 1.2
-        Ki_z = 0.08
+        Ki_z = 0.06
         Kd_z = 0.2
 
     i_z_limit = 10.0
 
     now = time.monotonic()
-    dt = (now - prev_t) if prev_t is not None else 0.02  # assume ~50 Hz on first call
+    dt = (now - prev_t) if prev_t is not None else 0.02
     prev_t = now
     if dt <= 0:
         dt = 1e-3
@@ -87,6 +88,7 @@ class DroneClient:
         self.prev_e_x = 0.0
         self.prev_tx = None
 
+        self.phase_tolerance = 4
 
     def start(self):
         # Start the control loop etc
@@ -111,63 +113,111 @@ class DroneClient:
             throttle=0, pitch=0, roll=0
         )  # placeholder, we only need coordinates
 
-        big_min_target_pos_x = min_target_pos.x * 2
-        big_min_target_pos_y = min_target_pos.y * 2
-        big_max_target_pos_x = max_target_pos.x * 2
-        big_max_target_pos_y = max_target_pos.y * 2
+        big_min_target_pos_x = min_target_pos.x - self.phase_tolerance
+        big_min_target_pos_y = min_target_pos.y - self.phase_tolerance
+        big_max_target_pos_x = max_target_pos.x + self.phase_tolerance
+        big_max_target_pos_y = max_target_pos.y + self.phase_tolerance
 
         #find center of target region
         x_best = (min_target_pos.x + max_target_pos.x) / 2
         y_best = (min_target_pos.y + max_target_pos.y) / 2
         z_best = (min_target_pos.z + max_target_pos.z) / 2
 
-        #find the error
+        #find the error to the center
         error_pos_z = z_best - self.position.z
         error_pos_x = x_best - self.position.x
         error_pos_y = y_best - self.position.y
+        print(f"Error position: ", error_pos_x, error_pos_y, error_pos_z)
 
-        #Apply PID control
-        self.min_roll = -8
-        self.max_roll = 8
-        rollObject = PIDCalculation(self.min_roll, self.max_roll, error_pos_y, 'roll', self.i_y, self.prev_e_y,
-                                    self.prev_ty)
-        roll = rollObject["pidValue"]
-        self.i_y = rollObject["i_z"]
-        self.prev_e_y = rollObject["prev_e_z"]
-        self.prev_ty = rollObject["prev_t"]
-        print(f"Roll history: ", self.i_y, self.prev_e_y, self.prev_ty)
+        # find the error to the laterals
+        if (error_pos_x > self.phase_tolerance or error_pos_x < -self.phase_tolerance) and (error_pos_y > self.phase_tolerance or error_pos_y < -self.phase_tolerance):
+            # Takeoff Phase
+            self.min_roll = -30
+            self.max_roll = 30
+            rollObject = PIDCalculation(self.min_roll, self.max_roll, error_pos_y, 'roll', self.i_y, self.prev_e_y,
+                                        self.prev_ty)
+            roll = rollObject["pidValue"]
+            self.i_y = rollObject["i_z"]
+            self.prev_e_y = rollObject["prev_e_z"]
+            self.prev_ty = rollObject["prev_t"]
+            print(f"Roll history: ", self.i_y, self.prev_e_y, self.prev_ty)
 
-        self.min_pitch = -8
-        self.max_pitch = 8
-        pitchObject = PIDCalculation(self.min_pitch, self.max_pitch, error_pos_x, 'pitch', self.i_x, self.prev_e_x,
-                                     self.prev_tx)
-        pitch = pitchObject["pidValue"]
-        self.i_x = pitchObject["i_z"]
-        self.prev_e_x = pitchObject["prev_e_z"]
-        self.prev_tx = pitchObject["prev_t"]
-        print(f"Pitch history: ", self.i_x, self.prev_e_x, self.prev_tx)
+            self.min_pitch = -30
+            self.max_pitch = 30
+            pitchObject = PIDCalculation(self.min_pitch, self.max_pitch, error_pos_x, 'pitch', self.i_x, self.prev_e_x,
+                                         self.prev_tx)
+            pitch = pitchObject["pidValue"]
+            self.i_x = pitchObject["i_z"]
+            self.prev_e_x = pitchObject["prev_e_z"]
+            self.prev_tx = pitchObject["prev_t"]
+            print(f"Pitch history: ", self.i_x, self.prev_e_x, self.prev_tx)
 
-        self.min_throttle = 40
-        self.max_throttle = 70
-        throttleObject = PIDCalculation(self.min_throttle, self.max_throttle, error_pos_z, 'throttle', self.i_z,
-                                        self.prev_e_z, self.prev_t)
-        throttle = throttleObject["pidValue"]
-        self.i_z = throttleObject["i_z"]
-        self.prev_e_z = throttleObject["prev_e_z"]
-        self.prev_t = throttleObject["prev_t"]
-        print(f"Throttle history: ", self.i_z, self.prev_e_z, self.prev_t)
+            self.min_throttle = 0
+            self.max_throttle = 90
+            throttleObject = PIDCalculation(self.min_throttle, self.max_throttle, error_pos_z, 'throttle', self.i_z,
+                                            self.prev_e_z, self.prev_t)
+            throttle = throttleObject["pidValue"]
+            self.i_z = throttleObject["i_z"]
+            self.prev_e_z = throttleObject["prev_e_z"]
+            self.prev_t = throttleObject["prev_t"]
+            print(f"Throttle history: ", self.i_z, self.prev_e_z, self.prev_t)
 
-        print("Requesting control input of:")
-        print(f"{throttle=}")
-        print(f"{pitch=}")
-        print(f"{roll=}")
-        # Send control
-        control = pb2.DroneClientMsg(
-            throttle=int(throttle),
-            pitch=int(pitch),
-            roll=int(roll),
-        )
-        self.send_queue.put(control)
+            print("Requesting control input of:")
+            print(f"{throttle=}")
+            print(f"{pitch=}")
+            print(f"{roll=}")
+            # Send control
+            control = pb2.DroneClientMsg(
+                throttle=int(throttle),
+                pitch=int(pitch),
+                roll=int(roll),
+            )
+            self.send_queue.put(control)
+
+        elif (error_pos_x < self.phase_tolerance or error_pos_x > -self.phase_tolerance) and (error_pos_y < self.phase_tolerance or error_pos_y > -self.phase_tolerance) :
+            # Stable Phase
+            # Apply PID control
+            self.min_roll = -8
+            self.max_roll = 8
+            rollObject = PIDCalculation(self.min_roll, self.max_roll, error_pos_y, 'roll', self.i_y, self.prev_e_y,
+                                        self.prev_ty)
+            roll = rollObject["pidValue"]
+            self.i_y = rollObject["i_z"]
+            self.prev_e_y = rollObject["prev_e_z"]
+            self.prev_ty = rollObject["prev_t"]
+            print(f"Roll history: ", self.i_y, self.prev_e_y, self.prev_ty)
+
+            self.min_pitch = -8
+            self.max_pitch = 8
+            pitchObject = PIDCalculation(self.min_pitch, self.max_pitch, error_pos_x, 'pitch', self.i_x, self.prev_e_x,
+                                         self.prev_tx)
+            pitch = pitchObject["pidValue"]
+            self.i_x = pitchObject["i_z"]
+            self.prev_e_x = pitchObject["prev_e_z"]
+            self.prev_tx = pitchObject["prev_t"]
+            print(f"Pitch history: ", self.i_x, self.prev_e_x, self.prev_tx)
+
+            self.min_throttle = 40
+            self.max_throttle = 70
+            throttleObject = PIDCalculation(self.min_throttle, self.max_throttle, error_pos_z, 'throttle', self.i_z,
+                                            self.prev_e_z, self.prev_t)
+            throttle = throttleObject["pidValue"]
+            self.i_z = throttleObject["i_z"]
+            self.prev_e_z = throttleObject["prev_e_z"]
+            self.prev_t = throttleObject["prev_t"]
+            print(f"Throttle history: ", self.i_z, self.prev_e_z, self.prev_t)
+
+            print("Requesting control input of:")
+            print(f"{throttle=}")
+            print(f"{pitch=}")
+            print(f"{roll=}")
+            # Send control
+            control = pb2.DroneClientMsg(
+                throttle=int(throttle),
+                pitch=int(pitch),
+                roll=int(roll),
+            )
+            self.send_queue.put(control)
 
     def receive(self):
         return next(self.event_stream)
@@ -203,7 +253,6 @@ class DroneClient:
 
                 if not self.has_taken_off and self.position.z > 0.02:  # 2 cm threshold
                     self.has_taken_off = True
-                    
 
                 # time tracking
                 now = time.time()
@@ -234,12 +283,23 @@ class DroneClient:
                 self.control_drone()
 
 
+def load_token():
+    path = os.getenv("DRONE_TOKEN_FILE", "token.txt")
+    try:
+        with open(path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    return line
+    except FileNotFoundError:
+        pass
+    raise ValueError("No token provided! Set DRONE_TOKEN env or put it in token.txt")
 
 if __name__ == "__main__":
     host = "172.104.137.51"
     port = 10301
     # TODO: add your token here
-    token = "b794ce6c-8b8c-4330-9c4c-85089892940c"
+    token = load_token()
     if token is None:
         raise ValueError("No token provided!")
     dc = DroneClient(host, port, token)
