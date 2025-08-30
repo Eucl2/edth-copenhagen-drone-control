@@ -6,7 +6,48 @@ import generated.drone_pb2_grpc as pb2_gprc
 import grpc
 import time
 
+def PIDCalculation(min_val, max_val, error, orient, i_z=0.0, prev_e_z=0.0, prev_t = None, extraThrottle=0):
+    if (orient == 'throttle'):
+        hover = ((min_val + max_val) / 2 + 5)
+        Kp_z = 10.0
+        Ki_z = 0.0
+        Kd_z = 0.0
+    else:
+        hover = ((min_val + max_val) / 2)
+        Kp_z = 1.2
+        Ki_z = 0.08
+        Kd_z = 0.2
 
+    i_z_limit = 10.0
+
+    now = time.monotonic()
+    dt = (now - prev_t) if prev_t is not None else 0.02  # assume ~50 Hz on first call
+    prev_t = now
+    if dt <= 0:
+        dt = 1e-3
+
+    P = Kp_z * error
+    i_z += error * dt
+    if i_z > i_z_limit: i_z = i_z_limit
+    if i_z < -i_z_limit: i_z = -i_z_limit
+    I = Ki_z * i_z
+
+    # --- D term ---
+    D = Kd_z * ((error - prev_e_z) / dt)
+    prev_e_z = error
+
+    # PID output is a *delta* around hover
+    delta_thr = P + I + D
+
+    u = hover + delta_thr
+    pidValue = max(min_val, min(max_val, u))
+    #print(f" History: ", i_z, prev_e_z, prev_t)
+    return {
+        "pidValue": int(round(pidValue)),
+        "i_z": i_z,
+        "prev_e_z": prev_e_z,
+        "prev_t": prev_t
+    }
 
 class SimulationState(Enum):
     INIT = 0
@@ -33,6 +74,18 @@ class DroneClient:
         self.sim_start_time = None
 
         self.has_taken_off = False
+
+        self.i_z = 0.0
+        self.prev_e_z = 0.0
+        self.prev_t = None
+
+        self.i_y = 0.0
+        self.prev_e_y = 0.0
+        self.prev_ty = None
+
+        self.i_x = 0.0
+        self.prev_e_x = 0.0
+        self.prev_tx = None
 
 
     def start(self):
@@ -63,34 +116,46 @@ class DroneClient:
         big_max_target_pos_x = max_target_pos.x * 2
         big_max_target_pos_y = max_target_pos.y * 2
 
-        throttle = 75
-        pitch = 0
-        roll = 0
-
         #find center of target region
         x_best = (min_target_pos.x + max_target_pos.x) / 2
         y_best = (min_target_pos.y + max_target_pos.y) / 2
         z_best = (min_target_pos.z + max_target_pos.z) / 2
 
-        # adjust speed based on distance to center
-        dx = x_best - self.position.x
-        dy = y_best - self.position.y
+        #find the error
+        error_pos_z = z_best - self.position.z
+        error_pos_x = x_best - self.position.x
+        error_pos_y = y_best - self.position.y
 
-        # slow down if inside big square
-        if big_min_target_pos_x <= self.position.x <= big_max_target_pos_x and \
-        big_min_target_pos_y <= self.position.y <= big_max_target_pos_y:
-            pitch = max(-2, min(2, dx))
-            roll = max(-2, min(2, dy))
-        else:
-            pitch = dx
-            roll = dy
+        #Apply PID control
+        self.min_roll = -8
+        self.max_roll = 8
+        rollObject = PIDCalculation(self.min_roll, self.max_roll, error_pos_y, 'roll', self.i_y, self.prev_e_y,
+                                    self.prev_ty)
+        roll = rollObject["pidValue"]
+        self.i_y = rollObject["i_z"]
+        self.prev_e_y = rollObject["prev_e_z"]
+        self.prev_ty = rollObject["prev_t"]
+        print(f"Roll history: ", self.i_y, self.prev_e_y, self.prev_ty)
 
-        # altitude
-        if self.position.z >= z_best:
-            throttle = 0
-        else:
-            throttle = 71
+        self.min_pitch = -8
+        self.max_pitch = 8
+        pitchObject = PIDCalculation(self.min_pitch, self.max_pitch, error_pos_x, 'pitch', self.i_x, self.prev_e_x,
+                                     self.prev_tx)
+        pitch = pitchObject["pidValue"]
+        self.i_x = pitchObject["i_z"]
+        self.prev_e_x = pitchObject["prev_e_z"]
+        self.prev_tx = pitchObject["prev_t"]
+        print(f"Pitch history: ", self.i_x, self.prev_e_x, self.prev_tx)
 
+        self.min_throttle = 40
+        self.max_throttle = 70
+        throttleObject = PIDCalculation(self.min_throttle, self.max_throttle, error_pos_z, 'throttle', self.i_z,
+                                        self.prev_e_z, self.prev_t)
+        throttle = throttleObject["pidValue"]
+        self.i_z = throttleObject["i_z"]
+        self.prev_e_z = throttleObject["prev_e_z"]
+        self.prev_t = throttleObject["prev_t"]
+        print(f"Throttle history: ", self.i_z, self.prev_e_z, self.prev_t)
 
         print("Requesting control input of:")
         print(f"{throttle=}")
