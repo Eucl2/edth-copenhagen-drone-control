@@ -11,7 +11,7 @@ def PIDCalculation(min_val, max_val, error, orient, i_z=0.0, prev_e_z=0.0, prev_
     if (orient == 'throttle'):
         hover = ((min_val + max_val) / 2 + 5)
         Kp_z = 10.0
-        Ki_z = 1#0.5
+        Ki_z = 0.3#0.5
         Kd_z = 0.1
     else:
         hover = ((min_val + max_val) / 2)
@@ -233,8 +233,11 @@ class DroneClient:
                     print("Goal region: ", self.goal_region)
                     self.position = result.start.drone_location
                     self.simulation_state = SimulationState.STARTED
-                    self.sim_start_time = time.time() 
+                    self.sim_start_time = time.time()
+                    self.z_best = (self.goal_region.minimal_point.z + self.goal_region.maximal_point.z) / 2
+
                     continue
+
                 else:
                     raise ValueError("Did not receive Simulation Start message as first message")
 
@@ -250,8 +253,9 @@ class DroneClient:
             # Update - pass into PID loop
             if result.WhichOneof("data") == "update":
                 self.position = result.update.drone_location
+                halfway_altitude = self.z_best / 2
 
-                if not self.has_taken_off and self.position.z > 0.02:  # 2 cm threshold
+                if not self.has_taken_off and self.position.z > halfway_altitude:  # 2 cm threshold
                     self.has_taken_off = True
 
                 # time tracking
@@ -278,6 +282,16 @@ class DroneClient:
                     print(f"\n------ Total time in good zone: {self.time_in_good_zone:.2f}s / {total_time:.2f}s ({percentage:.1f}%) ------\n")
 
                     return
+                
+                #  end iff drone lost too much altitude            
+                if self.has_taken_off and self.position.z <= halfway_altitude:
+                    self.simulation_state = SimulationState.ENDED
+                    total_time = time.time() - self.sim_start_time
+                    print(f"Simulation ended: Drone lost too much altitude (below halfway to target z={halfway_altitude:.2f})")
+                    percentage = (self.time_in_good_zone / total_time) * 100 if total_time > 0 else 0
+                    print(f"\n------ Total time in good zone: {self.time_in_good_zone:.2f}s / {total_time:.2f}s ({percentage:.1f}%) ------\n")
+                    return
+
 
                 # Run control
                 self.control_drone()
